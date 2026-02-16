@@ -13,8 +13,10 @@ function preloadImages(sources) {
   return Promise.all(
     sources.map(src => new Promise(resolve => {
       const img = new Image();
-      img.src = src;
       img.onload = () => resolve(img);
+      img.onerror = () => resolve(img); // FIX: Prevent production hangs if CDN image fails
+      img.src = src;
+      if (img.complete) resolve(img);   // FIX: Ensure cached images in production resolve instantly
     }))
   );
 }
@@ -64,7 +66,6 @@ class SlashEffect {
     ctx.save();
     ctx.globalAlpha = this.alpha;
     
-    // Gradient slash
     const gradient = ctx.createLinearGradient(
       this.points[0].x, this.points[0].y,
       this.points[this.points.length - 1].x, this.points[this.points.length - 1].y
@@ -128,7 +129,6 @@ class GameObject {
     ctx.rotate((this.rotation * Math.PI) / 180);
     ctx.scale(this.scale, this.scale);
     
-    // Enhanced shadow
     ctx.shadowColor = "rgba(0,0,0,0.4)";
     ctx.shadowBlur = 20;
     ctx.shadowOffsetY = 10;
@@ -199,6 +199,7 @@ export default function Game({ restart }) {
   const poolRef = useRef(null);
   const livesRef = useRef(3);
   const comboRef = useRef(new ComboDisplay());
+  const isGameOverRef = useRef(false); // FIX: Reliable way to track Game Over
 
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
@@ -207,6 +208,7 @@ export default function Game({ restart }) {
 
   useEffect(() => {
     let fruitImgs, bombImg;
+    let spawnInterval; // FIX: Hoisted so cleanup function can access it
 
     async function init() {
       const [apple, pineapple, bomb, watermelon, banana] = await preloadImages([appleSrc, pineappleSrc, bombSrc, watermelonSrc, bananaSrc]);
@@ -217,6 +219,7 @@ export default function Game({ restart }) {
 
     function startGame() {
       const canvas = canvasRef.current;
+      if (!canvas) return; // Safeguard
       const ctx = canvas.getContext("2d");
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -231,14 +234,15 @@ export default function Game({ restart }) {
         objectsRef.current.push(obj);
       };
 
-      const spawnInterval = setInterval(spawnObject, 1000);
+      spawnInterval = setInterval(spawnObject, 1000); // FIX: Assigned to hoisted variable
 
       const animate = () => {
-        if (livesRef.current <= 0 && !showGameOver) {
+        // FIX: Update UI safely exactly once
+        if (livesRef.current <= 0 && !isGameOverRef.current) {
+          isGameOverRef.current = true;
           setShowGameOver(true);
         }
 
-        // Modern gradient background
         const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
         grad.addColorStop(0, "#0f0c29");
         grad.addColorStop(0.5, "#302b63");
@@ -246,7 +250,6 @@ export default function Game({ restart }) {
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Animated grid overlay
         ctx.save();
         ctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
         ctx.lineWidth = 1;
@@ -265,7 +268,6 @@ export default function Game({ restart }) {
         }
         ctx.restore();
 
-        // Update and draw slash effects
         for (let i = slashEffectsRef.current.length - 1; i >= 0; i--) {
           const slash = slashEffectsRef.current[i];
           slash.update();
@@ -273,7 +275,6 @@ export default function Game({ restart }) {
           if (slash.alpha <= 0) slashEffectsRef.current.splice(i, 1);
         }
 
-        // Draw current swipe with glow
         if (swipeRef.current.length > 1) {
           ctx.save();
           const gradient = ctx.createLinearGradient(
@@ -298,7 +299,6 @@ export default function Game({ restart }) {
           ctx.restore();
         }
 
-        // Update particles
         for (let i = particlesRef.current.length - 1; i >= 0; i--) {
           const p = particlesRef.current[i];
           p.update();
@@ -306,13 +306,11 @@ export default function Game({ restart }) {
           if (p.alpha <= 0) particlesRef.current.splice(i, 1);
         }
 
-        // Update fruits
         for (let i = objectsRef.current.length - 1; i >= 0; i--) {
           const obj = objectsRef.current[i];
           obj.update(0.25);
           obj.draw(ctx);
 
-          // Collision Check
           for (let p of swipeRef.current) {
             const dist = Math.hypot(obj.x - p.x, obj.y - p.y);
             if (dist < obj.radius && !obj.sliced) {
@@ -334,7 +332,6 @@ export default function Game({ restart }) {
                   return newScore;
                 });
                 
-                // Colorful juice particles
                 const colors = ["#FF6B6B", "#4ECDC4", "#FFE66D", "#A8E6CF", "#FF8B94"];
                 for(let k=0; k<20; k++) {
                   particlesRef.current.push(
@@ -346,7 +343,6 @@ export default function Game({ restart }) {
                 livesRef.current = 0;
                 setLives(0);
                 
-                // Explosion particles
                 for(let k=0; k<40; k++) {
                   particlesRef.current.push(new Particle(obj.x, obj.y, "#FF4444"));
                 }
@@ -364,13 +360,12 @@ export default function Game({ restart }) {
           }
         }
 
-        // Update and draw combo
         comboRef.current.update();
         comboRef.current.draw(ctx, canvas.width, canvas.height);
 
-        if (livesRef.current > 0) {
-          animationRef.current = requestAnimationFrame(animate);
-        }
+        // FIX: Always request the next frame! This allows the explosion 
+        // particles to finish animating instead of instantly freezing the screen.
+        animationRef.current = requestAnimationFrame(animate); 
       };
 
       animate();
@@ -385,10 +380,7 @@ export default function Game({ restart }) {
         }
       };
       
-      const startDrawing = () => {
-        drawingRef.current = true;
-      };
-      
+      const startDrawing = () => drawingRef.current = true;
       const stopDrawing = () => {
         if (swipeRef.current.length > 1) {
           slashEffectsRef.current.push(new SlashEffect(swipeRef.current));
@@ -403,17 +395,18 @@ export default function Game({ restart }) {
       canvas.addEventListener("touchstart", startDrawing);
       canvas.addEventListener("touchend", stopDrawing);
       canvas.addEventListener("touchmove", handleMove);
-
-      return () => clearInterval(spawnInterval);
     }
 
     init();
+    
     return () => {
+      // FIX: Proper cleanup sequence
+      clearInterval(spawnInterval); 
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [showGameOver]);
+  }, []); // FIX: Removed showGameOver. We only want to init the engine ONCE.
 
   return (
     <>
@@ -543,6 +536,7 @@ export default function Game({ restart }) {
           text-align: center;
           box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
           pointer-events: auto;
+          z-index: 100; /* FIX: Added z-index to ensure it sits above the canvas */
           animation: slideIn 0.5s ease-out;
         }
         
