@@ -14,9 +14,9 @@ function preloadImages(sources) {
     sources.map(src => new Promise(resolve => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => resolve(img); // FIX: Prevent production hangs if CDN image fails
+      img.onerror = () => resolve(img); 
       img.src = src;
-      if (img.complete) resolve(img);   // FIX: Ensure cached images in production resolve instantly
+      if (img.complete) resolve(img);   
     }))
   );
 }
@@ -199,7 +199,7 @@ export default function Game({ restart }) {
   const poolRef = useRef(null);
   const livesRef = useRef(3);
   const comboRef = useRef(new ComboDisplay());
-  const isGameOverRef = useRef(false); // FIX: Reliable way to track Game Over
+  const isGameOverRef = useRef(false); 
 
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
@@ -208,7 +208,8 @@ export default function Game({ restart }) {
 
   useEffect(() => {
     let fruitImgs, bombImg;
-    let spawnInterval; // FIX: Hoisted so cleanup function can access it
+    let gameStartTime;
+    let lastSpawnTime;
 
     async function init() {
       const [apple, pineapple, bomb, watermelon, banana] = await preloadImages([appleSrc, pineappleSrc, bombSrc, watermelonSrc, bananaSrc]);
@@ -219,29 +220,54 @@ export default function Game({ restart }) {
 
     function startGame() {
       const canvas = canvasRef.current;
-      if (!canvas) return; // Safeguard
+      if (!canvas) return;
       const ctx = canvas.getContext("2d");
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
 
       bgMusic.play().catch(() => {});
       poolRef.current = new Objectpool(() => new GameObject());
+      
+      // Initialize timers for difficulty tracking
+      gameStartTime = performance.now();
+      lastSpawnTime = performance.now();
 
-      const spawnObject = () => {
+      const spawnObject = (bombProbability) => {
         if (livesRef.current <= 0) return;
         const obj = poolRef.current.get();
-        obj.reset(Math.random() < 0.85 ? "fruit" : "bomb", canvas.width, canvas.height, fruitImgs, bombImg);
+        // Uses dynamic probability
+        obj.reset(Math.random() > bombProbability ? "fruit" : "bomb", canvas.width, canvas.height, fruitImgs, bombImg);
         objectsRef.current.push(obj);
       };
 
-      spawnInterval = setInterval(spawnObject, 1000); // FIX: Assigned to hoisted variable
-
-      const animate = () => {
-        // FIX: Update UI safely exactly once
+      const animate = (timestamp = performance.now()) => {
         if (livesRef.current <= 0 && !isGameOverRef.current) {
           isGameOverRef.current = true;
           setShowGameOver(true);
         }
+
+        // --- DYNAMIC DIFFICULTY SYSTEM ---
+        const elapsedTime = timestamp - gameStartTime;
+        
+        // Max difficulty reached at 90 seconds (90000 ms)
+        // Value goes from 0.0 to 1.0
+        const difficultyProgress = Math.min(elapsedTime / 90000, 1); 
+
+        // Spawn delay goes from 1000ms down to 350ms
+        const currentSpawnDelay = 1000 - (difficultyProgress * 650);
+        
+        // Bomb probability goes from 15% up to 35%
+        const bombProbability = 0.15 + (difficultyProgress * 0.20);
+        
+        // Gravity increases slightly from 0.25 to 0.35 to make objects fall faster
+        const currentGravity = 0.25 + (difficultyProgress * 0.10);
+
+        // Dynamic Spawner 
+        if (timestamp - lastSpawnTime > currentSpawnDelay && livesRef.current > 0) {
+            spawnObject(bombProbability);
+            lastSpawnTime = timestamp;
+        }
+        // ---------------------------------
 
         const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
         grad.addColorStop(0, "#0f0c29");
@@ -308,7 +334,9 @@ export default function Game({ restart }) {
 
         for (let i = objectsRef.current.length - 1; i >= 0; i--) {
           const obj = objectsRef.current[i];
-          obj.update(0.25);
+          
+          // Pass the dynamic gravity to the update function
+          obj.update(currentGravity); 
           obj.draw(ctx);
 
           for (let p of swipeRef.current) {
@@ -363,8 +391,6 @@ export default function Game({ restart }) {
         comboRef.current.update();
         comboRef.current.draw(ctx, canvas.width, canvas.height);
 
-        // FIX: Always request the next frame! This allows the explosion 
-        // particles to finish animating instead of instantly freezing the screen.
         animationRef.current = requestAnimationFrame(animate); 
       };
 
@@ -400,13 +426,12 @@ export default function Game({ restart }) {
     init();
     
     return () => {
-      // FIX: Proper cleanup sequence
-      clearInterval(spawnInterval); 
+      // No more interval to clear, just the animation frame
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, []); // FIX: Removed showGameOver. We only want to init the engine ONCE.
+  }, []); 
 
   return (
     <>
@@ -536,7 +561,7 @@ export default function Game({ restart }) {
           text-align: center;
           box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
           pointer-events: auto;
-          z-index: 100; /* FIX: Added z-index to ensure it sits above the canvas */
+          z-index: 100;
           animation: slideIn 0.5s ease-out;
         }
         
